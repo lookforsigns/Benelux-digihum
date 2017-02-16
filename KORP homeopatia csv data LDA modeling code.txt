@@ -1,0 +1,250 @@
+### Marjoriikka Ylisiurua Helsingin yliopisto 14 Feb 2017
+# Benelux DH conference code
+
+# modeling:
+# LDA topic modeling for Suomi24-data
+# includes superfluous code
+
+import logging
+import os
+from gensim import corpora, models, similarities, utils
+from gensim.corpora import TextCorpus, MmCorpus, Dictionary
+from collections import defaultdict
+from pprint import pprint
+import json
+import csv
+
+import nltk
+import nltk.data
+from nltk import snowball
+from nltk.corpus import stopwords
+
+## init
+
+logging.basicConfig(format = "%(asctime)s : %(levelname)s : %(message)s", level=logging.INFO)
+ 
+#finStemmatizer = snowball.FinnishStemmer()
+
+processedText = []
+openFileName = []
+
+sampleData = False # kiikku: analysing sample (True) or whole data set (False)
+existingLemmaset = False # kiikku: analysing old combined lemma set combined.csv (True) or not (False)
+
+if sampleData:
+    topicNumber = 6 # how many topics to search
+    searchDirectorySample=("D://Terveys/Results/") # import deduplicated csv
+    outcomeSampleDir = ("D://Terveys/Results/")
+    outcomeGensimSampleDir = ("D:/Terveys/Results/") #gensim output filepath
+
+else:
+    topicNumber = 12 # 3, 6, 10, 12, 15 #  for Suomi24 homeopatia benelux digihum
+    searchDirectory=("D://Homeopatia/") # import combined csv
+    outcomeDir = ("D://Homeopatia/Results/")
+    outcomeGensimDir = ("D:/Homeopatia/Results/") # gensim outcome filepath
+    
+if sampleData:
+    appearance = 5 # how many times a word must be present to be included in the dictionary
+    howLarge = 500 # size of document chunks
+else:
+    appearance = 5 # how many times a word must be present to be included in the dictionary
+    howLarge = 5000  # size of document chunks
+
+## class MyCorpus(object):
+# initialize corpus with dictionary and top directory
+# then read all files in the top dir and preprocess each 
+class MyCorpus(object):
+
+    def __init__(self, top_dir):
+        #self = corpora.MmCorpus("D:\\results\corpus.mm")
+        self.top_dir = top_dir
+        self.dictionary = Dictionary(iter_documents(top_dir))
+    
+    def __iter__(self):
+        for line in iter_documents(self.top_dir):
+            #print("\n line")
+            #print(line)
+            yield preProcess(line)
+            
+## def preProcess(documents):
+# take a list of paragraph-strings
+# tokenize each paragraph-string, lowercase, clean stopwords
+# stem/lemmatize
+def preProcess(documents):
+
+    ## init
+    tokens = []
+    filtered_tokens = []
+    tokens_stopwords = []
+    tokens_stemmed = []
+
+    # remove trash from text
+    # especially consider the bot ads
+    # stopSigns = "/p p a quot > < ( ) ! , . : ; & ? * NUOLI + [ ] ... / # '' -- -blank /a “ ” http paypal"
+    stopSigns = "/p p a quot > < ( ) ! , . : ; & ? * NUOLI + [ ] ... / # '' -- -blank /a “ ” http paypal this message has been removed by"
+    stoplist = [w for w in stopSigns.split()]
+    stoplist = stoplist+(stopwords.words("finnish"))
+
+    ## tokenize the sentence paragraphs & edit
+
+    tokens = [nltk.word_tokenize(el) for el in documents] # el = string paragraph element in list
+    #print("\n tokenized document")
+    #print(tokens)
+
+    # lowercase the tokens and clean the documents of stopwords
+    for text in tokens:
+        filtered_tokens = [word.lower() for word in text if not word.lower() in stoplist]
+        #print("\n tokenized lowercase text, stopwords removed")
+        #print(sorted(filtered_tokens)) # print each tokenized document paragraph
+        tokens_stopwords.append(filtered_tokens)
+
+    #print("\n cleaned texts in a list by element")
+    #print(sorted(tokens_stopwords)) # print the whole set of tokenized texts before further filtering
+
+    # if not using lemmatized word list from Korp
+    # for each token in list, stem all remaining words
+    #if not lemmaSample:
+    #    for document in tokens_stopwords:
+    #        tokens = [finStemmatizer.stem(x) for x in document]
+    #        tokens_stemmed.append(tokens)
+    #else:
+    tokens_stemmed = tokens_stopwords
+    #option 3: don't stem
+    #tokens_stemmed = tokens_stopwords
+
+    #print("\n stemmed text")
+    #print(sorted(tokens_stemmed))
+
+    # returned list of tokens
+    return tokens_stemmed
+
+## def weedTokens(tokens_stemmed):
+# weed token list just to include those who appear more than APPEARANCE # of times
+# encode token strings
+def weedTokens(tokens_stemmed):
+    print("\nweeding tokens, include only those that appear at least "+str(appearance)+" times")
+
+    ## init
+    frequency = defaultdict(int)
+    tokens_enough = []
+
+    
+    ## discard tokens appearing only once
+    for token_list in tokens_stemmed:
+        #print("\n token list in tokens stemmed")
+        #print(token_list)
+        for token in token_list:
+            if token:
+                frequency[token] += 1
+ 
+    # remove words that only appear APPEARANCE amount of times and return them
+    # encode the strings to utf-8 at the same time
+    for tokens in tokens_stemmed:
+        filtered_tokens = [bytes(token, "utf-8") for token in tokens if frequency[token] > appearance]
+        tokens_enough.append(filtered_tokens)
+
+    #print(tokens_enough)
+
+    return tokens_enough
+
+## main
+
+if __name__ == "__main__":
+    # set directory
+    if sampleData:
+        os.chdir(searchDirectorySample)
+    else:
+        os.chdir(searchDirectory)
+
+    ## create new lemmaset file if needed
+    if not existingLemmaset:
+
+        # list name of every csv file in the dictionary
+        pprint("\nFollowing files found in directory: "+str(os.getcwd()))
+
+        for filename in os.listdir(os.getcwd()):
+            if filename.endswith(".csv"):
+                if sampleData:
+                    openFileName.append(searchDirectorySample + filename)
+                else:
+                    openFileName.append(searchDirectory + filename)
+                pprint(filename) # print names of found csv-files (in case of Terveysdata, roughly 9 filenames)
+
+        # for every file in the list, open file, go through it
+        for item in range(len(openFileName)):
+
+            ## open one file with rows of data including lemmatized sentences in one cell
+            with open(openFileName[item], "r", encoding="utf-8") as openFile: #vai latin1
+                documents = csv.DictReader(openFile, delimiter=",")
+                texts = []
+                for row in documents:
+                    a = row["lemmas"]
+                    #print(a)
+                    texts.append(a)
+
+                # for every found file, preprocess and add to previous documents (rest of the files if possible)
+                processedText = processedText + preProcess(texts)
+    
+        print("\nFinal text with remaining lemmas/stems")
+        if sampleData:
+            foundFileName = outcomeSampleDir+"combined sample.csv"
+        else:
+            foundFileName = outcomeDir+"combined.csv"
+
+            ## lemmaset file used in dictionary creation        
+        with open(foundFileName, "w", newline='', encoding='utf-8') as foundFile:
+            print(foundFileName)
+            # pick header names from first dictionary row
+            header = processedText[0]
+            w = csv.writer(foundFile)
+            for item in processedText:
+                w.writerow([item])
+
+    #print(processedText)
+
+    else:
+        print("\nuse existing lemmaset:")
+        if sampleData:
+            foundFileName = outcomeSampleDir+"combined sample.csv"
+        else:
+            foundFileName = outcomeDir+"combined.csv"
+        print(foundFileName)
+        
+        # devaa tähän filen avaamiskoodi, joka tekee uuden processed text objektin, kuten kreikka-koodissa
+
+    # after adding more documents, weed tokens for those who appear more than APPERANCE # of times only
+    processedText = weedTokens(processedText)
+
+    ## create dictionary & save as file
+    # create dictionary and save it for future use
+    # do this every time you update your document collection
+    dic = corpora.Dictionary(processedText)
+    #print(dic)
+    if sampleData:
+        dic.save(outcomeGensimSampleDir+"dic sample.dict") #Store the dictionary for future reference
+    else:
+        dic.save(outcomeGensimDir+"dic.dict") #Store the dictionary for future reference
+    print("\n Dictionary of documents: format - (stem, ID)")
+    #print(dic.token2id)
+
+    ## create corpus & save as file
+    # create a corpus and save it for future use
+    # do this every time you update your document collection
+    #print("\nText included in corpus")
+    #print(processedText)
+    # this corpus below resides fully in RAM memory as plain python list
+    # with large datasets this won't do
+    # preferably, access each document from a file
+    corpus = [dic.doc2bow(text) for text in processedText]
+    if sampleData:
+        corpora.MmCorpus.serialize(outcomeGensimSampleDir+"corpus sample.mm",corpus) 
+    else:
+        corpora.MmCorpus.serialize(outcomeGensimDir+"corpus.mm",corpus) 
+    print("\n Corpus of documents: format - (ID, # of occurrences)")
+    #print(corpus)
+
+    ## LDA topic modeling
+
+    lda = models.ldamodel.LdaModel(corpus=corpus, id2word=dic, num_topics=topicNumber, update_every=1, chunksize=howLarge, passes=10)
+
+    print(lda.show_topics(num_topics=topicNumber, num_words=10, log = True, formatted = True))
